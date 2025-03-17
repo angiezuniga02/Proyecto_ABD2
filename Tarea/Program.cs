@@ -7,12 +7,18 @@ class DatabaseRecoverySim
 {
     static Dictionary<int, string> database = new Dictionary<int, string>();
     static List<string> log = new List<string>();
-    static Dictionary<string, string> users = new Dictionary<string, string>();
+    static Dictionary<string, (string Password, Role UserRole)> users = new Dictionary<string, (string, Role)>();
     static string checkpointFile = "checkpoint.txt";
     static string logFile = "log.txt"; // Guarda las fechas y horas de alguna operación realizada
     static string authLogFile = "authLog.txt"; // Para verificar las autenticaciones
     static string userFile = "users.txt"; // Para almacenar los usuarios
-    static string currentUser = string.Empty; // Para almacenar el usuario actualmente autenticado
+    static string currentUser  = string.Empty; // Para almacenar el usuario actualmente autenticado
+
+    enum Role
+    {
+        Admin,
+        User
+    }
 
     static void Main()
     {
@@ -22,7 +28,7 @@ class DatabaseRecoverySim
 
         while (true)
         {
-            if (AuthenticateUser())
+            if (AuthenticateUser ())
             {
                 Console.WriteLine("Autenticación exitosa.");
                 break;
@@ -40,7 +46,7 @@ class DatabaseRecoverySim
         }
     }
 
-    static bool AuthenticateUser()
+    static bool AuthenticateUser ()
     {
         Console.WriteLine("\n--- Sistema de Autenticación ---");
         Console.Write("1. Iniciar sesión\n2. Registrarse\nSeleccione una opción: ");
@@ -49,26 +55,30 @@ class DatabaseRecoverySim
         switch (option)
         {
             case "1":
-                return LoginUser();
+                return LoginUser ();
             case "2":
-                RegisterUser();
-                return AuthenticateUser();
+                RegisterUser ();
+                return AuthenticateUser ();
             default:
                 Console.WriteLine("Opción no válida.");
-                return AuthenticateUser();
+                return AuthenticateUser ();
         }
     }
 
-    static void RegisterUser()
+    static void RegisterUser ()
     {
         Console.Write("Ingrese nombre de usuario: ");
         string username = Console.ReadLine();
         Console.Write("Ingrese contraseña: ");
         string password = Console.ReadLine();
 
+        Console.WriteLine("Seleccione un rol: 1. Admin 2. User");
+        string roleInput = Console.ReadLine();
+        Role role = roleInput == "1" ? Role.Admin : Role.User;
+
         if (!users.ContainsKey(username))
         {
-            users[username] = password;
+            users[username] = (password, role);
             Console.WriteLine("Usuario registrado con éxito.");
             SaveUsers();
         }
@@ -78,32 +88,30 @@ class DatabaseRecoverySim
         }
     }
 
-    static bool LoginUser()
+    static bool LoginUser ()
     {
         Console.Write("Ingrese nombre de usuario: ");
         string username = Console.ReadLine();
         Console.Write("Ingrese contraseña: ");
         string password = Console.ReadLine();
 
-        bool userExists = users.ContainsKey(username);
-
-        if (!userExists)
+        if (!users.ContainsKey(username))
         {
             Console.WriteLine("El nombre de usuario no está registrado.");
             LogFailedAttempt(username, "usuario");
             return false;
         }
 
-        bool passwordCorrect = users[username] == password;
-
-        if (!passwordCorrect)
+        var userInfo = users[username];
+        if (userInfo.Password != password)
         {
             Console.WriteLine("Contraseña incorrecta.");
             LogFailedAttempt(username, "contraseña");
             return false;
         }
 
-        currentUser = username;
+        currentUser  = username;
+        Console.WriteLine($"Rol del usuario: {userInfo.UserRole}");
         return true;
     }
 
@@ -124,7 +132,7 @@ class DatabaseRecoverySim
 
     static void SaveUsers()
     {
-        File.WriteAllLines(userFile, users.Select(u => $"{u.Key} {u.Value}"));
+        File.WriteAllLines(userFile, users.Select(u => $"{u.Key} {u.Value.Password} {u.Value.UserRole}"));
     }
 
     static void LoadUsers()
@@ -134,9 +142,10 @@ class DatabaseRecoverySim
             foreach (var line in File.ReadAllLines(userFile))
             {
                 var parts = line.Split(' ');
-                if (parts.Length == 2)
+                if (parts.Length == 3)
                 {
-                    users[parts[0]] = parts[1];
+                    var role = (Role)Enum.Parse(typeof(Role), parts[2]);
+                    users[parts[0]] = (parts[1], role);
                 }
             }
         }
@@ -159,16 +168,21 @@ class DatabaseRecoverySim
     }
 
     static void ProcessCommand(string input)
+{
+    string[] parts = input.Split(' ');
+    if (parts.Length < 1) return;
+
+    string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+    string logEntry = $"{timestamp} - {currentUser } - ";
+
+    // Corrección aquí: Cambié "User  Role" a "User Role"
+    var userRole = users[currentUser ].UserRole;
+
+    switch (parts[0].ToUpper())
     {
-        string[] parts = input.Split(' ');
-        if (parts.Length < 1) return;
-
-        string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-        string logEntry = $"{timestamp} - {currentUser} - ";
-
-        switch (parts[0].ToUpper())
-        {
-            case "INSERT":
+        case "INSERT":
+            if (userRole == Role.Admin) // Solo Admin puede insertar
+            {
                 if (parts.Length == 3 && int.TryParse(parts[1], out int insertId))
                 {
                     database[insertId] = parts[2];
@@ -177,8 +191,15 @@ class DatabaseRecoverySim
                     Console.WriteLine($"Se agregó: Cod {insertId} Nombre: {parts[2]}");
                     SaveLog();
                 }
-                break;
-            case "UPDATE":
+            }
+            else
+            {
+                Console.WriteLine("Acceso denegado. Solo los administradores pueden insertar.");
+            }
+            break;
+        case "UPDATE":
+            if (userRole == Role.Admin) // Solo Admin puede actualizar
+            {
                 if (parts.Length == 3 && int.TryParse(parts[1], out int updateId) && database.ContainsKey(updateId))
                 {
                     string oldValue = database[updateId];
@@ -188,9 +209,16 @@ class DatabaseRecoverySim
                     Console.WriteLine($"Actualizado: {updateId} -> {parts[2]}");
                     SaveLog();
                 }
-                break;
+            }
+            else
+            {
+                Console.WriteLine("Acceso denegado. Solo los administradores pueden actualizar.");
+            }
+            break;
 
-            case "DELETE":
+        case "DELETE":
+            if (userRole == Role.Admin) // Solo Admin puede eliminar
+            {
                 if (parts.Length == 2 && int.TryParse(parts[1], out int deleteId) && database.ContainsKey(deleteId))
                 {
                     string deletedValue = database[deleteId];
@@ -200,26 +228,30 @@ class DatabaseRecoverySim
                     Console.WriteLine($"Eliminado: {deleteId}");
                     SaveLog();
                 }
-                break;
-            case "CHECKPOINT":
-                CreateCheckpoint();
-                break;
-            case "CRASH":
-                SimulateCrash();
-                break;
-            case "UNDO":
-                UndoLastTransaction();
-                break;
-            case "REDO":
-                RedoTransactions();
-                break;
-            case "EXIT":
-                SaveLog();
-                Environment.Exit(0);
-                break;
-        }
+            }
+            else
+            {
+                Console.WriteLine("Acceso denegado. Solo los administradores pueden eliminar.");
+            }
+            break;
+        case "CHECKPOINT":
+            CreateCheckpoint();
+            break;
+        case "CRASH":
+            SimulateCrash();
+            break;
+        case "UNDO":
+            UndoLastTransaction();
+            break;
+        case "REDO":
+            RedoTransactions();
+            break;
+        case "EXIT":
+            SaveLog();
+            Environment.Exit(0);
+            break;
     }
-
+}
     static void CreateCheckpoint()
     {
         File.WriteAllLines(checkpointFile, database.Select(kv => $"{kv.Key} {kv.Value}"));
